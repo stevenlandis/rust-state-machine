@@ -205,13 +205,6 @@ mod dfa {
         }
         Some(state) => state,
       };
-      struct StackInfo {
-        state_idx: usize,
-      }
-      struct StateInfo<S, A> {
-        dfa_state: State<S, A>,
-        nfa_state: nfa::ParseState<A>,
-      }
 
       let mut state_map = HashMap::<BTreeSet<usize>, usize>::new();
       let mut nfa_states = Vec::<nfa::ParseState<A>>::new();
