@@ -1,9 +1,13 @@
 mod nfa {
+  use super::dfa;
   use std::collections::{BTreeSet, HashMap, HashSet};
+
+  #[derive(Clone)]
   struct State<S, A> {
     edges: Vec<Edge<S, A>>,
-    terminal: bool,
   }
+
+  #[derive(Clone)]
   enum Edge<S, A> {
     Empty {
       actions: Vec<A>,
@@ -15,10 +19,14 @@ mod nfa {
       symbol: S,
     },
   }
+
+  #[derive(Clone)]
   pub struct Nfa<S, A> {
     states: Vec<State<S, A>>,
-    initial_states: Vec<usize>,
+    start_states: HashSet<usize>,
+    end_states: HashSet<usize>,
   }
+
   pub type ParseState<A> = HashMap<usize, Vec<A>>;
 
   pub fn get_parse_set<A>(state: &ParseState<A>) -> BTreeSet<usize> {
@@ -47,9 +55,9 @@ mod nfa {
   }
   pub fn get_common_actions<A: PartialEq + Clone>(
     state: &ParseState<A>,
-  ) -> Option<(Vec<A>, ParseState<A>)> {
+  ) -> (Vec<A>, ParseState<A>) {
     if state.is_empty() {
-      return None;
+      return (vec![], state.clone());
     }
     let model_actions = state.values().next().unwrap();
     let mut prefix_len: usize = 0;
@@ -63,9 +71,6 @@ mod nfa {
       }
       prefix_len += 1;
     }
-    if prefix_len == 0 {
-      return None;
-    }
     let common_actions: Vec<_> = model_actions[..prefix_len].iter().cloned().collect();
     let mut new_state: ParseState<A> = HashMap::new();
     for (state_idx, old_actions) in state {
@@ -74,25 +79,26 @@ mod nfa {
         old_actions[prefix_len..].iter().cloned().collect(),
       );
     }
-    Some((common_actions, new_state))
+    (common_actions, new_state)
   }
 
-  impl<S: PartialEq, A: Clone + PartialEq> Nfa<S, A> {
+  impl<S: PartialEq + Clone, A: Clone + PartialEq> Nfa<S, A> {
     pub fn new() -> Nfa<S, A> {
       Nfa {
         states: Vec::new(),
-        initial_states: Vec::new(),
+        start_states: HashSet::new(),
+        end_states: HashSet::new(),
       }
     }
     pub fn add_state(&mut self, initial: bool, terminal: bool) -> usize {
       let id = self.states.len();
       if initial {
-        self.initial_states.push(id);
+        self.start_states.insert(id);
       }
-      self.states.push(State {
-        edges: Vec::new(),
-        terminal,
-      });
+      if terminal {
+        self.end_states.insert(id);
+      }
+      self.states.push(State { edges: Vec::new() });
       id
     }
     pub fn add_edge(&mut self, from: usize, to: usize, symbol: S, actions: Vec<A>) {
@@ -109,7 +115,7 @@ mod nfa {
     // definitions for parsing
     pub fn get_initial_parse_state(&self) -> Option<ParseState<A>> {
       let mut initial_state: ParseState<A> = HashMap::new();
-      for state in &self.initial_states {
+      for state in &self.start_states {
         initial_state.insert(*state, Vec::new());
       }
       self.take_empty_edges(&initial_state)
@@ -173,7 +179,104 @@ mod nfa {
     pub fn is_terminal(&self, state: &ParseState<A>) -> bool {
       state
         .keys()
-        .any(|state_idx| self.states[*state_idx].terminal)
+        .any(|state_idx| self.end_states.contains(state_idx))
+    }
+    pub fn from_dfa(dfa: &dfa::Dfa<S, A>) -> Nfa<S, A> {
+      let mut nfa = Nfa::<S, A>::new();
+      for dfa_state_idx in 0..dfa.states.len() {
+        nfa.add_state(
+          dfa_state_idx == dfa.initial_state,
+          dfa.end_states.contains(&dfa_state_idx),
+        );
+      }
+      for state_idx in 0..dfa.states.len() {
+        let state = &dfa.states[state_idx];
+        for (symbol, edge) in &state.edges {
+          nfa.add_edge(state_idx, edge.to, symbol.clone(), edge.actions.clone());
+        }
+      }
+      nfa
+    }
+    pub fn repeat(&self) -> Nfa<S, A> {
+      let mut new_nfa = Nfa {
+        states: self.states.clone(),
+        start_states: HashSet::new(),
+        end_states: HashSet::new(),
+      };
+      let s0 = new_nfa.add_state(true, true);
+      for state_idx in &self.start_states {
+        new_nfa.add_empty_edge(s0, *state_idx, vec![]);
+      }
+      for state_idx in &self.end_states {
+        new_nfa.add_empty_edge(*state_idx, s0, vec![]);
+      }
+      new_nfa
+    }
+    pub fn import_edges(&mut self, nfa: &Nfa<S, A>, offset: usize) {
+      for state_idx in 0..nfa.states.len() {
+        let state = &nfa.states[state_idx];
+        for edge in &state.edges {
+          match edge {
+            Edge::Empty { actions, to } => {
+              self.add_empty_edge(state_idx + offset, to + offset, actions.clone());
+            }
+            Edge::Symbol {
+              symbol,
+              actions,
+              to,
+            } => {
+              self.add_edge(
+                state_idx + offset,
+                to + offset,
+                symbol.clone(),
+                actions.clone(),
+              );
+            }
+          };
+        }
+      }
+    }
+    pub fn union(nfas: &Vec<&Nfa<S, A>>) -> Nfa<S, A> {
+      let mut new_nfa = Nfa::<S, A> {
+        states: Vec::new(),
+        start_states: HashSet::new(),
+        end_states: HashSet::new(),
+      };
+      for nfa in nfas {
+        let offset = new_nfa.states.len();
+        for state_idx in 0..nfa.states.len() {
+          new_nfa.add_state(
+            nfa.start_states.contains(&state_idx),
+            nfa.end_states.contains(&state_idx),
+          );
+        }
+        new_nfa.import_edges(nfa, offset);
+      }
+      new_nfa
+    }
+    pub fn concat(nfas: &[&Nfa<S, A>]) -> Nfa<S, A> {
+      let mut new_nfa = Nfa::<S, A>::new();
+      let connector_states: Vec<_> = (0..(nfas.len() + 1))
+        .map(|i| new_nfa.add_state(i == 0, i == nfas.len()))
+        .collect();
+      for i in 0..nfas.len() {
+        let offset = new_nfa.states.len();
+        let nfa = nfas[i];
+        for state_idx in 0..nfa.states.len() {
+          new_nfa.add_state(
+            i == 0 && nfa.start_states.contains(&state_idx),
+            i == nfas.len() - 1 && nfa.end_states.contains(&state_idx),
+          );
+        }
+        new_nfa.import_edges(nfa, offset);
+        for start_state_idx in &nfa.start_states {
+          new_nfa.add_empty_edge(connector_states[i], start_state_idx + offset, vec![]);
+        }
+        for end_state_idx in &nfa.end_states {
+          new_nfa.add_empty_edge(end_state_idx + offset, connector_states[i + 1], vec![]);
+        }
+      }
+      new_nfa
     }
   }
 }
@@ -182,16 +285,17 @@ mod dfa {
   use super::nfa;
   use std::collections::{BTreeSet, HashMap, HashSet};
 
-  struct Edge<A> {
-    to: usize,
-    actions: Vec<A>,
+  pub struct Edge<A> {
+    pub to: usize,
+    pub actions: Vec<A>,
   }
-  struct State<S, A> {
-    edges: HashMap<S, Edge<A>>,
+  pub struct State<S, A> {
+    pub edges: HashMap<S, Edge<A>>,
   }
   pub struct Dfa<S, A> {
-    states: Vec<State<S, A>>,
-    initial_state: usize,
+    pub states: Vec<State<S, A>>,
+    pub initial_state: usize,
+    pub end_states: HashSet<usize>,
   }
   pub struct ParseState {
     state: usize,
@@ -209,6 +313,7 @@ mod dfa {
       let mut state_map = HashMap::<BTreeSet<usize>, usize>::new();
       let mut nfa_states = Vec::<nfa::ParseState<A>>::new();
       let mut dfa_states = Vec::<State<S, A>>::new();
+      let mut dfa_end_states = HashSet::<usize>::new();
       let mut stack = HashSet::<usize>::new();
 
       state_map.insert(nfa::get_parse_set(&initial_state), 0);
@@ -234,16 +339,15 @@ mod dfa {
               match nfa.step(&nfa_states[state_idx], symbol) {
                 None => return None,
                 Some(next_state) => {
-                  let (common_actions, next_state): (Vec<A>, nfa::ParseState<A>) =
-                    match nfa::get_common_actions(&next_state) {
-                      None => (Vec::new(), next_state),
-                      Some((common_actions, new_state)) => (common_actions, new_state),
-                    };
+                  let (common_actions, next_state) = nfa::get_common_actions(&next_state);
                   let key = nfa::get_parse_set(&next_state);
                   let to = match state_map.get(&key) {
                     None => {
                       println!("edge to new state");
                       let to_state_idx = dfa_states.len();
+                      if nfa.is_terminal(&next_state) {
+                        dfa_end_states.insert(to_state_idx);
+                      }
                       nfa_states.push(next_state);
                       dfa_states.push(State {
                         edges: HashMap::new(),
@@ -277,6 +381,7 @@ mod dfa {
       Some(Dfa {
         states: dfa_states,
         initial_state: 0,
+        end_states: dfa_end_states,
       })
     }
 
@@ -314,6 +419,21 @@ mod nfa_tests {
       let actions = state.get(state_idx).unwrap();
       assert_eq!(actions, correct_actions);
     }
+  }
+
+  fn assert_behavior(
+    nfa: &Nfa<u32, u32>,
+    symbols: Vec<u32>,
+    correct_actions: Vec<u32>,
+    accepts: bool,
+  ) {
+    let mut state = nfa.get_initial_parse_state().unwrap();
+    for symbol in &symbols {
+      state = nfa.step(&state, *symbol).unwrap();
+    }
+    assert_eq!(nfa.is_terminal(&state), accepts);
+    let (actions, _) = get_common_actions(&state);
+    assert_eq!(actions, correct_actions);
   }
 
   #[test]
@@ -414,6 +534,81 @@ mod nfa_tests {
 
     let state = nfa.step(&state, 2).unwrap();
     assert_state(&state, &vec![(2, vec![0, 0, 0])]);
+  }
+
+  #[test]
+  fn from_repeat() {
+    let mut nfa = Nfa::<u32, u32>::new();
+    let s0 = nfa.add_state(true, false);
+    let s1 = nfa.add_state(false, false);
+    let s2 = nfa.add_state(false, true);
+    nfa.add_edge(s0, s1, 0, vec![0]);
+    nfa.add_edge(s1, s2, 1, vec![1]);
+
+    let nfa = nfa.repeat();
+    assert_behavior(&nfa, vec![], vec![], true);
+    assert_behavior(&nfa, vec![0], vec![0], false);
+    assert_behavior(&nfa, vec![0, 1], vec![0, 1], true);
+    assert_behavior(&nfa, vec![0, 1, 0], vec![0, 1, 0], false);
+    assert_behavior(&nfa, vec![0, 1, 0, 1], vec![0, 1, 0, 1], true);
+  }
+
+  #[test]
+  fn from_union() {
+    let mut nfa_a = Nfa::<u32, u32>::new();
+    let s0 = nfa_a.add_state(true, false);
+    let s1 = nfa_a.add_state(false, false);
+    let s2 = nfa_a.add_state(false, false);
+    let s3 = nfa_a.add_state(false, true);
+    nfa_a.add_edge(s0, s1, 1, vec![0]);
+    nfa_a.add_edge(s1, s2, 2, vec![]);
+    nfa_a.add_edge(s2, s3, 3, vec![]);
+
+    let mut nfa_b = Nfa::<u32, u32>::new();
+    let s0 = nfa_b.add_state(true, false);
+    let s1 = nfa_b.add_state(false, false);
+    let s2 = nfa_b.add_state(false, false);
+    let s3 = nfa_b.add_state(false, true);
+    nfa_b.add_edge(s0, s1, 1, vec![1]);
+    nfa_b.add_edge(s1, s2, 2, vec![]);
+    nfa_b.add_edge(s2, s3, 4, vec![]);
+
+    let nfa = Nfa::union(&vec![&nfa_a, &nfa_b]);
+    assert_behavior(&nfa, vec![], vec![], false);
+    assert_behavior(&nfa, vec![1], vec![], false);
+    assert_behavior(&nfa, vec![1, 2], vec![], false);
+    assert_behavior(&nfa, vec![1, 2, 3], vec![0], true);
+    assert_behavior(&nfa, vec![1, 2, 4], vec![1], true);
+  }
+
+  #[test]
+  fn from_concat() {
+    let mut nfa_a = Nfa::<u32, u32>::new();
+    let s0 = nfa_a.add_state(true, false);
+    let s1 = nfa_a.add_state(false, false);
+    let s2 = nfa_a.add_state(false, false);
+    let s3 = nfa_a.add_state(false, true);
+    nfa_a.add_edge(s0, s1, 1, vec![0]);
+    nfa_a.add_edge(s1, s2, 2, vec![]);
+    nfa_a.add_edge(s2, s3, 3, vec![]);
+
+    let mut nfa_b = Nfa::<u32, u32>::new();
+    let s0 = nfa_b.add_state(true, false);
+    let s1 = nfa_b.add_state(false, false);
+    let s2 = nfa_b.add_state(false, false);
+    let s3 = nfa_b.add_state(false, true);
+    nfa_b.add_edge(s0, s1, 1, vec![1]);
+    nfa_b.add_edge(s1, s2, 2, vec![]);
+    nfa_b.add_edge(s2, s3, 4, vec![]);
+
+    let nfa = Nfa::concat(&[&nfa_a, &nfa_b]);
+    assert_behavior(&nfa, vec![], vec![], false);
+    assert_behavior(&nfa, vec![1], vec![0], false);
+    assert_behavior(&nfa, vec![1, 2], vec![0], false);
+    assert_behavior(&nfa, vec![1, 2, 3], vec![0], false);
+    assert_behavior(&nfa, vec![1, 2, 3, 1], vec![0, 1], false);
+    assert_behavior(&nfa, vec![1, 2, 3, 1, 2], vec![0, 1], false);
+    assert_behavior(&nfa, vec![1, 2, 3, 1, 2, 4], vec![0, 1], true);
   }
 }
 

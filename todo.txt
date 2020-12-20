@@ -1,0 +1,10 @@
+
+and the trickiest...
+dfa.reduce()
+
+and I want this all to work seamlessly with strings.
+
+I might also want to automatically remove common actions sets at the nfa level instead of the dfa level.
+
+brainstorm what this language could look like:
+brainstorm how this language would work with CFGs:
