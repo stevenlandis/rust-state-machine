@@ -181,6 +181,9 @@ pub mod nfa {
         .keys()
         .any(|state_idx| self.end_states.contains(state_idx))
     }
+    pub fn has_pending_actions(&self, state: &ParseState<A>) -> bool {
+      state.values().any(|actions| actions.len() > 0)
+    }
     pub fn from_dfa(dfa: &dfa::Dfa<S, A>) -> Nfa<S, A> {
       let mut nfa = Nfa::<S, A>::new();
       for dfa_state_idx in 0..dfa.states.len() {
@@ -281,7 +284,7 @@ pub mod nfa {
   }
 }
 
-mod dfa {
+pub mod dfa {
   use super::nfa;
   use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -316,12 +319,25 @@ mod dfa {
       let mut dfa_end_states = HashSet::<usize>::new();
       let mut stack = HashSet::<usize>::new();
 
-      state_map.insert(nfa::get_parse_set(&initial_state), 0);
-      nfa_states.push(initial_state);
-      dfa_states.push(State {
-        edges: HashMap::new(),
-      });
-      stack.insert(0);
+      macro_rules! add_state {
+        ($state:expr, $key:expr, $idx:expr) => {{
+          if nfa.is_terminal(&$state) {
+            if nfa.has_pending_actions(&$state) {
+              return None;
+            }
+            dfa_end_states.insert($idx);
+          }
+          nfa_states.push($state);
+          dfa_states.push(State {
+            edges: HashMap::new(),
+          });
+          state_map.insert($key, $idx);
+          stack.insert($idx);
+        }};
+      }
+
+      let initial_key = nfa::get_parse_set(&initial_state);
+      add_state!(initial_state, initial_key, 0);
 
       loop {
         println!("stack len={}", stack.len());
@@ -345,15 +361,7 @@ mod dfa {
                     None => {
                       println!("edge to new state");
                       let to_state_idx = dfa_states.len();
-                      if nfa.is_terminal(&next_state) {
-                        dfa_end_states.insert(to_state_idx);
-                      }
-                      nfa_states.push(next_state);
-                      dfa_states.push(State {
-                        edges: HashMap::new(),
-                      });
-                      state_map.insert(key, to_state_idx);
-                      stack.insert(to_state_idx);
+                      add_state!(next_state, key, to_state_idx);
                       to_state_idx
                     }
                     Some(to_state_idx) => {
@@ -672,6 +680,19 @@ mod dfa_tests {
     nfa.add_edge(s0, s2, 2, vec![]);
     nfa.add_edge(s1, s1, 1, vec![1]);
     nfa.add_edge(s2, s2, 3, vec![]);
+
+    assert!(dfa::Dfa::from_nfa(&nfa).is_none());
+  }
+
+  #[test]
+  fn construct_fail_from_pending_actions_on_end_state() {
+    let mut nfa = nfa::Nfa::<u32, u32>::new();
+    let s0 = nfa.add_state(true, false);
+    let s1 = nfa.add_state(false, false);
+    let s2 = nfa.add_state(true, false);
+    let s3 = nfa.add_state(false, true);
+    nfa.add_empty_edge(s0, s1, vec![0]);
+    nfa.add_empty_edge(s2, s3, vec![1]);
 
     assert!(dfa::Dfa::from_nfa(&nfa).is_none());
   }

@@ -92,6 +92,18 @@ impl Pattern {
   }
 }
 
+struct Parser {
+  nfa: PatternNfa,
+  state: Option<fa::dfa::ParseSate>,
+}
+impl Parser {
+  pub fn from_pattern(pattern: &Pattern) -> Parser {
+    Parser {
+      nfa: pattern.to_nfa(),
+    }
+  }
+}
+
 #[cfg(test)]
 mod pattern_tests {
   use super::Pattern;
