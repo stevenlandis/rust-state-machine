@@ -1,4 +1,4 @@
-mod nfa {
+pub mod nfa {
   use super::dfa;
   use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -254,7 +254,7 @@ mod nfa {
       }
       new_nfa
     }
-    pub fn concat(nfas: &[&Nfa<S, A>]) -> Nfa<S, A> {
+    pub fn concat(nfas: &Vec<&Nfa<S, A>>) -> Nfa<S, A> {
       let mut new_nfa = Nfa::<S, A>::new();
       let connector_states: Vec<_> = (0..(nfas.len() + 1))
         .map(|i| new_nfa.add_state(i == 0, i == nfas.len()))
@@ -601,7 +601,7 @@ mod nfa_tests {
     nfa_b.add_edge(s1, s2, 2, vec![]);
     nfa_b.add_edge(s2, s3, 4, vec![]);
 
-    let nfa = Nfa::concat(&[&nfa_a, &nfa_b]);
+    let nfa = Nfa::concat(&vec![&nfa_a, &nfa_b]);
     assert_behavior(&nfa, vec![], vec![], false);
     assert_behavior(&nfa, vec![1], vec![0], false);
     assert_behavior(&nfa, vec![1, 2], vec![0], false);

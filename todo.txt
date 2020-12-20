@@ -1,3 +1,10 @@
+when converting nfa -> dfa
+  make sure all terminal states have no pending actions, so it is guaranteed that when a user stops parsing
+  a state machine at a terminal state, they will have all output actions.
+
+Even with dfa -> nfa conversions, it's still tricky to do inversions because
+the current implementation of dfas doesn't handle all transitions. This would be a lot
+for a byte (256 transitions) so I'll think about it for now, but no promises.
 
 and the trickiest...
 dfa.reduce()
