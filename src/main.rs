@@ -1,3 +1,4 @@
+mod binary_fa;
 mod fa;
 mod pattern;
 

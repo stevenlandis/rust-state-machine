@@ -16,6 +16,7 @@ pub struct Pattern {
 }
 
 type PatternNfa = fa::nfa::Nfa<u8, u32>;
+type PatternDfa = fa::dfa::Dfa<u8, u32>;
 
 impl Pattern {
   fn new() -> Pattern {
@@ -23,31 +24,31 @@ impl Pattern {
       components: Vec::new(),
     }
   }
-  fn then_str(&mut self, string: &str) -> &mut Pattern {
+  fn then_str(mut self, string: &str) -> Self {
     self
       .components
       .push(Component::String(String::from(string)));
     self
   }
-  fn then(&mut self, pattern: Pattern) -> &mut Pattern {
+  fn then(mut self, pattern: Pattern) -> Self {
     self.components.push(Component::Then(pattern));
     self
   }
-  fn maybe(&mut self, pattern: Pattern) -> &mut Pattern {
+  fn maybe(mut self, pattern: Pattern) -> Self {
     self.components.push(Component::Maybe(pattern));
     self
   }
-  fn repeat(&mut self, pattern: Pattern) -> &mut Pattern {
+  fn repeat(mut self, pattern: Pattern) -> Self {
     self.components.push(Component::Repeat(pattern));
     self
   }
-  fn or(&mut self, patterns: &Vec<Pattern>) -> &mut Pattern {
+  fn or(mut self, patterns: &Vec<Pattern>) -> Self {
     self
       .components
       .push(Component::Or(patterns.iter().cloned().collect()));
     self
   }
-  fn action(&mut self, action: u32) -> &mut Pattern {
+  fn action(mut self, action: u32) -> Self {
     self.components.push(Component::Action(action));
     self
   }
@@ -93,20 +94,59 @@ impl Pattern {
 }
 
 struct Parser {
-  nfa: PatternNfa,
-  state: Option<fa::dfa::ParseSate>,
+  dfa: PatternDfa,
+  state: Option<fa::dfa::ParseState>,
+  actions: Vec<u32>,
 }
 impl Parser {
-  pub fn from_pattern(pattern: &Pattern) -> Parser {
-    Parser {
-      nfa: pattern.to_nfa(),
+  pub fn from_pattern(pattern: &Pattern) -> Option<Parser> {
+    let dfa = match fa::dfa::Dfa::from_nfa(&pattern.to_nfa()) {
+      Some(dfa) => dfa,
+      None => {
+        return None;
+      }
+    };
+    let initial_state = dfa.get_initial_parse_state();
+    Some(Parser {
+      dfa,
+      state: Some(initial_state),
+      actions: Vec::new(),
+    })
+  }
+  pub fn feed_str(&mut self, string: &str) {
+    for byte in string.as_bytes() {
+      self.state = match &self.state {
+        None => {
+          break;
+        }
+        Some(state) => match self.dfa.step(&state, *byte) {
+          None => None,
+          Some((new_state, new_actions)) => {
+            for action in new_actions {
+              self.actions.push(*action);
+            }
+            Some(new_state)
+          }
+        },
+      };
+    }
+  }
+  pub fn drain_actions(&mut self) -> Vec<u32> {
+    let actions = self.actions.clone();
+    self.actions = Vec::new();
+    actions
+  }
+  pub fn is_done(&self) -> bool {
+    match &self.state {
+      None => false,
+      Some(state) => self.dfa.is_terminal(state),
     }
   }
 }
 
 #[cfg(test)]
 mod pattern_tests {
-  use super::Pattern;
+  use super::{Parser, Pattern};
 
   #[test]
   fn make_simple_pattern() {
@@ -114,27 +154,33 @@ mod pattern_tests {
       .then_str("stuff")
       .then_str("and")
       .then_str("things");
+
+    let mut parser = Parser::from_pattern(&pattern).unwrap();
+    parser.feed_str("stuffandthings");
+    assert!(parser.is_done());
+    parser.feed_str("x");
+    assert!(!parser.is_done());
+  }
+
+  #[test]
+  fn disambiguate_similar_patterns() {
+    let pattern = Pattern::new().or(&vec![
+      Pattern::new().then_str("stuff"),
+      Pattern::new().then_str("stufx"),
+    ]);
+
+    let mut parser = Parser::from_pattern(&pattern).unwrap();
+    parser.feed_str("stuff");
+    assert!(parser.is_done());
+    // assert_eq!(parser.drain_actions(), vec![1]);
+
+    let mut parser = Parser::from_pattern(&pattern).unwrap();
+    parser.feed_str("stufx");
+    assert!(parser.is_done());
+
+    let mut parser = Parser::from_pattern(&pattern).unwrap();
+    parser.feed_str("stuf");
+    assert!(!parser.is_done());
+    // assert_eq!(parser.drain_actions(), vec![2]);
   }
 }
-
-/*
-let pat_struct = pattern::new()
-  .then(pat_pub)
-  .then(pat_ws)
-  .then(pat_struct_token)
-  .then(pat_ws)
-  .then(pat_identifier)
-  .then(pat_ws)
-  .then(pat_braket_open)
-  .maybe(pattern::new()
-    .then(pattern::new()
-      .then(pat_identifier)
-      .then(pat_ws)
-      .then(pat_colon)
-      .then(pat_ws)
-      .then(pat_type)
-    )
-    .separted_by(pat_comma)
-  )
-  .then(pat_braket_end)
-*/

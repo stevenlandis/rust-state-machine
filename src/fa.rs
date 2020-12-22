@@ -399,11 +399,15 @@ pub mod dfa {
       }
     }
 
-    pub fn step(&self, state: ParseState, symbol: S) -> Option<(ParseState, &Vec<A>)> {
+    pub fn step(&self, state: &ParseState, symbol: S) -> Option<(ParseState, &Vec<A>)> {
       match self.states[state.state].edges.get(&symbol) {
         None => None,
         Some(Edge { to, actions }) => Some((ParseState { state: *to }, actions)),
       }
+    }
+
+    pub fn is_terminal(&self, state: &ParseState) -> bool {
+      self.end_states.contains(&state.state)
     }
   }
 }
@@ -637,13 +641,13 @@ mod dfa_tests {
     let dfa = dfa::Dfa::from_nfa(&nfa).unwrap();
     let state = dfa.get_initial_parse_state();
 
-    let (state, actions) = dfa.step(state, 1).unwrap();
+    let (state, actions) = dfa.step(&state, 1).unwrap();
     assert_eq!(actions, &vec![1]);
 
-    let (state, actions) = dfa.step(state, 2).unwrap();
+    let (state, actions) = dfa.step(&state, 2).unwrap();
     assert_eq!(actions, &vec![2]);
 
-    assert!(dfa.step(state, 3).is_none());
+    assert!(dfa.step(&state, 3).is_none());
   }
 
   #[test]
@@ -661,13 +665,13 @@ mod dfa_tests {
     let dfa = dfa::Dfa::from_nfa(&nfa).unwrap();
     let state = dfa.get_initial_parse_state();
 
-    let (state, actions) = dfa.step(state, 1).unwrap();
+    let (state, actions) = dfa.step(&state, 1).unwrap();
     assert_eq!(actions, &vec![1]);
 
-    let (state, actions) = dfa.step(state, 2).unwrap();
+    let (state, actions) = dfa.step(&state, 2).unwrap();
     assert_eq!(actions, &vec![2]);
 
-    assert!(dfa.step(state, 42).is_none());
+    assert!(dfa.step(&state, 42).is_none());
   }
 
   #[test]
