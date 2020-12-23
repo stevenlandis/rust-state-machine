@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 struct NfaNode {
   edges: Vec<NfaEdge>,
+  flags: HashSet<u32>,
 }
 #[derive(Clone)]
 enum NfaEdgeSymbol {
@@ -77,6 +78,7 @@ fn invert_basic_nfa() {
 struct DfaNode {
   t_edge: usize,
   f_edge: usize,
+  flags: HashSet<u32>,
 }
 struct DfaEdge {
   to: usize,
@@ -116,6 +118,17 @@ fn convert_basic_nfa_to_dfa() {
   let state = dfa.step(&state, true);
   assert_eq!(dfa.is_end(&state), false);
 }
+#[test]
+fn simple_nfa_flag() {
+  let mut nfa = Nfa::new();
+  let s0 = nfa.add_node(true, false);
+  let s1 = nfa.add_node_with_flags(false, false, &vec![42]);
+  nfa.add_edge(s0, s1, true);
+  let state = nfa.get_initial_state();
+  assert!(!nfa.get_flags(&state).contains(&42));
+  let state = nfa.step(&state, true);
+  assert!(nfa.get_flags(&state).contains(&42));
+}
 
 impl Nfa {
   fn new() -> Nfa {
@@ -126,6 +139,9 @@ impl Nfa {
     }
   }
   pub fn add_node(&mut self, start: bool, end: bool) -> usize {
+    self.add_node_with_flags(start, end, &vec![])
+  }
+  pub fn add_node_with_flags(&mut self, start: bool, end: bool, flags: &Vec<u32>) -> usize {
     let node_idx = self.nodes.len();
     if start {
       self.start_nodes.insert(node_idx);
@@ -133,7 +149,10 @@ impl Nfa {
     if end {
       self.end_nodes.insert(node_idx);
     }
-    self.nodes.push(NfaNode { edges: Vec::new() });
+    self.nodes.push(NfaNode {
+      edges: Vec::new(),
+      flags: flags.iter().cloned().collect(),
+    });
     node_idx
   }
   pub fn add_edge(&mut self, from: usize, to: usize, symbol: bool) {
@@ -197,10 +216,19 @@ impl Nfa {
   fn is_end(&self, state: &NfaState) -> bool {
     state.nodes.iter().any(|node| self.end_nodes.contains(node))
   }
+  fn get_flags(&self, state: &NfaState) -> HashSet<u32> {
+    let mut flags = HashSet::<u32>::new();
+    for node_i in &state.nodes {
+      for flag in &self.nodes[*node_i].flags {
+        flags.insert(*flag);
+      }
+    }
+    flags
+  }
   fn add_nfa_as_edge(&mut self, from: usize, to: usize, nfa: &Nfa) {
     let offset = self.nodes.len();
-    for _ in &nfa.nodes {
-      self.add_node(false, false);
+    for node in &nfa.nodes {
+      self.add_node_with_flags(false, false, &node.flags.iter().cloned().collect());
     }
     for from in 0..nfa.nodes.len() {
       for edge in &nfa.nodes[from].edges {
@@ -261,7 +289,11 @@ impl Nfa {
   fn from_dfa(dfa: &Dfa) -> Nfa {
     let mut nfa = Nfa::new();
     for i in 0..dfa.nodes.len() {
-      nfa.add_node(i == dfa.start_node, dfa.end_nodes.contains(&i));
+      nfa.add_node_with_flags(
+        i == dfa.start_node,
+        dfa.end_nodes.contains(&i),
+        &dfa.nodes[i].flags.iter().cloned().collect(),
+      );
     }
     for i in 0..dfa.nodes.len() {
       nfa.add_edge(i, dfa.nodes[i].f_edge, false);
@@ -279,7 +311,7 @@ impl Nfa {
   fn print(&self) {
     for i in 0..self.nodes.len() {
       println!(
-        "{}: {} {}",
+        "{}: {} {}, flags: {:?}",
         i,
         if self.start_nodes.contains(&i) {
           "start"
@@ -290,7 +322,8 @@ impl Nfa {
           "end"
         } else {
           ""
-        }
+        },
+        self.nodes[i].flags
       );
       for edge in &self.nodes[i].edges {
         match edge.symbol {
@@ -327,6 +360,7 @@ impl Dfa {
       nodes.push(DfaNode {
         f_edge: 0,
         t_edge: 0,
+        flags: nfa.get_flags(state),
       });
       is_node_mapped.push(false);
       if nfa.is_end(state) {
@@ -413,6 +447,12 @@ impl Dfa {
   fn is_end(&self, state: &DfaState) -> bool {
     self.end_nodes.contains(&state.node)
   }
+  fn get_flags(&self, state: &DfaState) -> HashSet<u32> {
+    self.nodes[state.node].flags.clone()
+  }
+  fn has_flag(&self, state: &DfaState, flag: &u32) -> bool {
+    self.nodes[state.node].flags.contains(&flag)
+  }
   fn invert(&self) -> Dfa {
     Dfa {
       nodes: self.nodes.clone(),
@@ -434,7 +474,7 @@ impl Dfa {
   fn print(&self) {
     for i in 0..self.nodes.len() {
       println!(
-        "{}: f->{} t->{}, {}",
+        "{}: f->{} t->{}, {}, flags: {:?}",
         i,
         self.nodes[i].f_edge,
         self.nodes[i].t_edge,
@@ -442,7 +482,8 @@ impl Dfa {
           "end"
         } else {
           "not end"
-        }
+        },
+        self.nodes[i].flags
       );
     }
   }
@@ -584,6 +625,7 @@ enum Component {
   Maybe(Pattern),
   Repeat(Pattern),
   Or(Vec<Pattern>),
+  Flag(u32),
 }
 #[derive(Clone)]
 pub struct Pattern {
@@ -627,6 +669,10 @@ impl Pattern {
       .push(Component::Or(patterns.iter().cloned().collect()));
     self
   }
+  fn flag(mut self, flag: u32) -> Self {
+    self.components.push(Component::Flag(flag));
+    self
+  }
   fn to_nfa(&self) -> Nfa {
     let component_nfas: Vec<Nfa> = self
       .components
@@ -664,6 +710,11 @@ impl Pattern {
           let pattern_nfas: Vec<_> = patterns.iter().map(|pattern| pattern.to_nfa()).collect();
           Nfa::union(&pattern_nfas.iter().map(|nfa| nfa).collect())
         }
+        Component::Flag(flag) => {
+          let mut nfa = Nfa::new();
+          nfa.add_node_with_flags(true, true, &vec![*flag]);
+          nfa
+        }
       })
       .collect();
     Nfa::concat(&component_nfas.iter().map(|nfa| nfa).collect())
@@ -673,12 +724,15 @@ impl Pattern {
   }
 }
 
-fn accepts_bits(dfa: &Dfa, symbols: Vec<bool>) -> bool {
+fn feed_dfa(dfa: &Dfa, symbols: Vec<bool>) -> DfaState {
   let mut state = dfa.get_initial_state();
   for symbol in symbols {
     state = dfa.step(&state, symbol);
   }
-  dfa.is_end(&state)
+  state
+}
+fn accepts_bits(dfa: &Dfa, symbols: Vec<bool>) -> bool {
+  dfa.is_end(&feed_dfa(dfa, symbols))
 }
 fn accepts_str(dfa: &Dfa, string: &str) -> bool {
   let mut bits = Vec::<bool>::new();
@@ -751,4 +805,14 @@ fn pattern_or() {
   let dfa = pattern.to_dfa();
   assert!(accepts_str(&dfa, "Hello my name is Alice"));
   assert!(accepts_str(&dfa, "Hello my name is Bob"));
+}
+#[test]
+fn pattern_flag() {
+  let pattern = Pattern::new().or(&vec![
+    Pattern::new().then_bit(true).then_bit(false).flag(0),
+    Pattern::new().then_bit(true).then_bit(true).flag(1),
+  ]);
+  let dfa = pattern.to_dfa();
+  assert!(dfa.has_flag(&feed_dfa(&dfa, vec![true, false]), &0));
+  assert!(dfa.has_flag(&feed_dfa(&dfa, vec![true, true]), &1));
 }
