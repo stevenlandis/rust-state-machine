@@ -192,7 +192,7 @@ impl Nfa {
         }
       }
     }
-    NfaState { nodes: new_nodes }
+    self.take_empty_edges(&NfaState { nodes: new_nodes })
   }
   fn is_end(&self, state: &NfaState) -> bool {
     state.nodes.iter().any(|node| self.end_nodes.contains(node))
@@ -274,6 +274,35 @@ impl Nfa {
   }
   fn invert(&self) -> Nfa {
     self.to_dfa().invert().to_nfa()
+  }
+
+  fn print(&self) {
+    for i in 0..self.nodes.len() {
+      println!(
+        "{}: {} {}",
+        i,
+        if self.start_nodes.contains(&i) {
+          "start"
+        } else {
+          ""
+        },
+        if self.end_nodes.contains(&i) {
+          "end"
+        } else {
+          ""
+        }
+      );
+      for edge in &self.nodes[i].edges {
+        match edge.symbol {
+          NfaEdgeSymbol::Empty => {
+            println!("  e -> {}", edge.to);
+          }
+          NfaEdgeSymbol::Symbol(symbol) => {
+            println!("  {} -> {}", symbol, edge.to);
+          }
+        }
+      }
+    }
   }
 }
 
@@ -365,6 +394,9 @@ impl Dfa {
   fn to_nfa(&self) -> Nfa {
     Nfa::from_dfa(self)
   }
+  fn to_block_dfa(&self, size: usize) -> BlockDfa {
+    BlockDfa::from_dfa(self, size)
+  }
   fn get_initial_state(&self) -> DfaState {
     DfaState {
       node: self.start_node,
@@ -414,4 +446,309 @@ impl Dfa {
       );
     }
   }
+}
+
+struct BlockDfa {
+  size: usize,
+  nodes: Vec<BlockDfaNode>,
+  start_node: usize,
+  end_nodes: HashSet<usize>,
+}
+struct BlockDfaNode {
+  edges: Vec<usize>,
+}
+impl BlockDfa {
+  fn from_dfa(dfa: &Dfa, size: usize) -> BlockDfa {
+    let mut node_map = HashMap::<usize, usize>::new();
+    let mut nodes = Vec::<BlockDfaNode>::new();
+    let mut is_node_mapped = Vec::<bool>::new();
+    let mut end_nodes = HashSet::<usize>::new();
+    let mut stack = Vec::<usize>::new();
+
+    let add_node = |node: &usize,
+                    dfa: &Dfa,
+                    node_map: &mut HashMap<usize, usize>,
+                    nodes: &mut Vec<BlockDfaNode>,
+                    is_node_mapped: &mut Vec<bool>,
+                    end_nodes: &mut HashSet<usize>|
+     -> usize {
+      let new_idx = nodes.len();
+      nodes.push(BlockDfaNode { edges: Vec::new() });
+      is_node_mapped.push(false);
+      node_map.insert(*node, new_idx);
+      if dfa.end_nodes.contains(&node) {
+        end_nodes.insert(new_idx);
+      }
+      new_idx
+    };
+
+    let start_node = add_node(
+      &dfa.start_node,
+      dfa,
+      &mut node_map,
+      &mut nodes,
+      &mut is_node_mapped,
+      &mut end_nodes,
+    );
+    stack.push(dfa.start_node);
+
+    loop {
+      match stack.pop() {
+        None => break,
+        Some(dfa_idx) => {
+          let block_dfa_idx = *node_map.get(&dfa_idx).unwrap();
+          if is_node_mapped[block_dfa_idx] {
+            continue;
+          }
+          is_node_mapped[block_dfa_idx] = true;
+          for i in 0..(1 << size) {
+            let mut temp_state = dfa_idx;
+            for j in 0..size {
+              temp_state = dfa
+                .step(&DfaState { node: temp_state }, i & (1 << j) != 0)
+                .node;
+            }
+            let to = match node_map.get(&temp_state) {
+              Some(idx) => *idx,
+              None => {
+                let idx = add_node(
+                  &temp_state,
+                  dfa,
+                  &mut node_map,
+                  &mut nodes,
+                  &mut is_node_mapped,
+                  &mut end_nodes,
+                );
+                stack.push(temp_state);
+                idx
+              }
+            };
+            nodes[block_dfa_idx].edges.push(to);
+          }
+        }
+      }
+    }
+
+    BlockDfa {
+      size,
+      nodes,
+      start_node,
+      end_nodes,
+    }
+  }
+
+  fn print(&self) {
+    for node_i in 0..self.nodes.len() {
+      let node = &self.nodes[node_i];
+      // map from to-state to symbols
+      let mut bins = HashMap::<usize, HashSet<usize>>::new();
+      for edge_i in 0..node.edges.len() {
+        let to = node.edges[edge_i];
+        if !bins.contains_key(&to) {
+          bins.insert(to, HashSet::new());
+        }
+        bins.get_mut(&to).unwrap().insert(edge_i);
+      }
+      let mut bin_sizes: Vec<_> = bins.iter().map(|(key, val)| (key, val.len())).collect();
+      // smallest to largest
+      bin_sizes.sort_by_key(|(_, val)| *val);
+      println!(
+        "{}: {}",
+        node_i,
+        if self.end_nodes.contains(&node_i) {
+          "end"
+        } else {
+          ""
+        },
+      );
+      for bin_i in 0..(bin_sizes.len() - 1) {
+        let (bin_key, _) = bin_sizes[bin_i];
+        print!("  ");
+        for symbol in bins.get(bin_key).unwrap() {
+          print!("{} ", symbol);
+        }
+        println!("-> {}", bin_key);
+      }
+      let (last_bin_key, _) = bin_sizes.last().unwrap();
+      println!("  else -> {}", last_bin_key);
+    }
+  }
+}
+
+#[derive(Clone)]
+enum Component {
+  Bit(bool),
+  U8(u8),
+  String(String),
+  Then(Pattern),
+  Maybe(Pattern),
+  Repeat(Pattern),
+  Or(Vec<Pattern>),
+}
+#[derive(Clone)]
+pub struct Pattern {
+  components: Vec<Component>,
+}
+impl Pattern {
+  fn new() -> Pattern {
+    Pattern {
+      components: Vec::new(),
+    }
+  }
+  fn then_bit(mut self, bit: bool) -> Self {
+    self.components.push(Component::Bit(bit));
+    self
+  }
+  fn then_u8(mut self, val: u8) -> Self {
+    self.components.push(Component::U8(val));
+    self
+  }
+  fn then_str(mut self, string: &str) -> Self {
+    self
+      .components
+      .push(Component::String(String::from(string)));
+    self
+  }
+  fn then(mut self, pattern: Pattern) -> Self {
+    self.components.push(Component::Then(pattern));
+    self
+  }
+  fn maybe(mut self, pattern: Pattern) -> Self {
+    self.components.push(Component::Maybe(pattern));
+    self
+  }
+  fn repeat(mut self, pattern: Pattern) -> Self {
+    self.components.push(Component::Repeat(pattern));
+    self
+  }
+  fn or(mut self, patterns: &Vec<Pattern>) -> Self {
+    self
+      .components
+      .push(Component::Or(patterns.iter().cloned().collect()));
+    self
+  }
+  fn to_nfa(&self) -> Nfa {
+    let component_nfas: Vec<Nfa> = self
+      .components
+      .iter()
+      .map(|component| match component {
+        Component::Bit(val) => {
+          let mut nfa = Nfa::new();
+          let s0 = nfa.add_node(true, false);
+          let s1 = nfa.add_node(false, true);
+          nfa.add_edge(s0, s1, *val);
+          nfa
+        }
+        Component::U8(num) => {
+          let mut pattern = Pattern::new();
+          for i in 0..8 {
+            pattern = pattern.then_bit(num & 1 << i != 0);
+          }
+          pattern.to_nfa()
+        }
+        Component::String(string) => {
+          let mut pattern = Pattern::new();
+          for byte in string.as_bytes() {
+            pattern = pattern.then_u8(*byte);
+          }
+          pattern.to_nfa()
+        }
+        Component::Then(pattern) => pattern.to_nfa(),
+        Component::Maybe(pattern) => {
+          let mut nfa = Nfa::new();
+          nfa.add_node(true, true);
+          Nfa::union(&vec![&nfa, &pattern.to_nfa()])
+        }
+        Component::Repeat(pattern) => pattern.to_nfa().repeat(),
+        Component::Or(patterns) => {
+          let pattern_nfas: Vec<_> = patterns.iter().map(|pattern| pattern.to_nfa()).collect();
+          Nfa::union(&pattern_nfas.iter().map(|nfa| nfa).collect())
+        }
+      })
+      .collect();
+    Nfa::concat(&component_nfas.iter().map(|nfa| nfa).collect())
+  }
+  fn to_dfa(&self) -> Dfa {
+    self.to_nfa().to_dfa()
+  }
+}
+
+fn accepts_bits(dfa: &Dfa, symbols: Vec<bool>) -> bool {
+  let mut state = dfa.get_initial_state();
+  for symbol in symbols {
+    state = dfa.step(&state, symbol);
+  }
+  dfa.is_end(&state)
+}
+fn accepts_str(dfa: &Dfa, string: &str) -> bool {
+  let mut bits = Vec::<bool>::new();
+  for byte in string.as_bytes() {
+    for i in 0..8 {
+      bits.push(byte & (1 << i) != 0);
+    }
+  }
+  accepts_bits(dfa, bits)
+}
+
+#[test]
+fn basic_pattern() {
+  let pattern = Pattern::new()
+    .then_bit(false)
+    .then_bit(true)
+    .then_bit(false);
+
+  let dfa = pattern.to_dfa();
+  assert!(accepts_bits(&dfa, vec![false, true, false]));
+  assert!(!accepts_bits(&dfa, vec![true, true, false]));
+  assert!(!accepts_bits(&dfa, vec![false, false, false]));
+  assert!(!accepts_bits(&dfa, vec![false, true, true]));
+}
+#[test]
+fn pattern_then_u8() {
+  let pattern = Pattern::new().then_u8(0b01010101);
+  let dfa = pattern.to_dfa();
+  assert!(accepts_bits(
+    &dfa,
+    vec![true, false, true, false, true, false, true, false]
+  ));
+}
+#[test]
+fn pattern_then_str() {
+  let pattern = Pattern::new().then_str("ab");
+  let dfa = pattern.to_dfa();
+  assert!(accepts_str(&dfa, "ab"));
+  assert!(!accepts_str(&dfa, "aa"));
+}
+#[test]
+fn pattern_repeat() {
+  let pattern = Pattern::new().repeat(Pattern::new().then_str("ab"));
+  let dfa = pattern.to_dfa();
+  assert!(accepts_str(&dfa, ""));
+  assert!(!accepts_str(&dfa, "a"));
+  assert!(accepts_str(&dfa, "ab"));
+  assert!(!accepts_str(&dfa, "aba"));
+  assert!(accepts_str(&dfa, "abab"));
+  assert!(accepts_str(&dfa, "abababababab"));
+}
+#[test]
+fn pattern_maybe() {
+  let pattern = Pattern::new()
+    .then_str("stuff")
+    .maybe(Pattern::new().then_str("and"))
+    .then_str("things");
+  let dfa = pattern.to_dfa();
+  assert!(accepts_str(&dfa, "stuffthings"));
+  assert!(accepts_str(&dfa, "stuffandthings"));
+  assert!(!accepts_str(&dfa, "suffthings"));
+  assert!(!accepts_str(&dfa, "stuffandthing"));
+}
+#[test]
+fn pattern_or() {
+  let pattern = Pattern::new().then_str("Hello my name is ").or(&vec![
+    Pattern::new().then_str("Alice"),
+    Pattern::new().then_str("Bob"),
+  ]);
+  let dfa = pattern.to_dfa();
+  assert!(accepts_str(&dfa, "Hello my name is Alice"));
+  assert!(accepts_str(&dfa, "Hello my name is Bob"));
 }

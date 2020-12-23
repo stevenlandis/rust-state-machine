@@ -14,3 +14,7 @@ One quirk of this setup is these state machines are specifically restricted to b
 This repo is still a work in progress, but eventually it will be turned into a library that can be easily used.
 
 This libary makes most operations immutable. For example, calling nfa.invert() produces a new nfa with inverted behavior.
+
+# Binary won't work! My state machine has a non-power-of-two number of symbols!
+
+You can use [Shannon coding](https://en.wikipedia.org/wiki/Shannon_coding) to get around this. Make a binary tree with a leaf for each of your symbols, and the path from root to leaf is the binary encoding. Because it's a tree, no encoding is a prefix of another which means the state machine should work correctly. It might be interesting to see if this holds up when reversing the tree though...

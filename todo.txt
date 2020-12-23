@@ -15,3 +15,7 @@ I might also want to automatically remove common actions sets at the nfa level i
 
 brainstorm what this language could look like:
 brainstorm how this language would work with CFGs:
+
+Binary FA TODO
+  dfa equals
+  nfa equals
