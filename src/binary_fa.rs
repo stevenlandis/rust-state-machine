@@ -651,16 +651,16 @@ impl Pattern {
       .push(Component::String(String::from(string)));
     self
   }
-  fn then(mut self, pattern: Pattern) -> Self {
-    self.components.push(Component::Then(pattern));
+  fn then(mut self, pattern: &Pattern) -> Self {
+    self.components.push(Component::Then(pattern.clone()));
     self
   }
-  fn maybe(mut self, pattern: Pattern) -> Self {
-    self.components.push(Component::Maybe(pattern));
+  fn maybe(mut self, pattern: &Pattern) -> Self {
+    self.components.push(Component::Maybe(pattern.clone()));
     self
   }
-  fn repeat(mut self, pattern: Pattern) -> Self {
-    self.components.push(Component::Repeat(pattern));
+  fn repeat(mut self, pattern: &Pattern) -> Self {
+    self.components.push(Component::Repeat(pattern.clone()));
     self
   }
   fn or(mut self, patterns: &Vec<Pattern>) -> Self {
@@ -775,7 +775,7 @@ fn pattern_then_str() {
 }
 #[test]
 fn pattern_repeat() {
-  let pattern = Pattern::new().repeat(Pattern::new().then_str("ab"));
+  let pattern = Pattern::new().repeat(&Pattern::new().then_str("ab"));
   let dfa = pattern.to_dfa();
   assert!(accepts_str(&dfa, ""));
   assert!(!accepts_str(&dfa, "a"));
@@ -788,7 +788,7 @@ fn pattern_repeat() {
 fn pattern_maybe() {
   let pattern = Pattern::new()
     .then_str("stuff")
-    .maybe(Pattern::new().then_str("and"))
+    .maybe(&Pattern::new().then_str("and"))
     .then_str("things");
   let dfa = pattern.to_dfa();
   assert!(accepts_str(&dfa, "stuffthings"));
@@ -815,4 +815,45 @@ fn pattern_flag() {
   let dfa = pattern.to_dfa();
   assert!(dfa.has_flag(&feed_dfa(&dfa, vec![true, false]), &0));
   assert!(dfa.has_flag(&feed_dfa(&dfa, vec![true, true]), &1));
+}
+#[test]
+fn parse_a_phone_number() {
+  let digits = Pattern::new().or(
+    &('0'..='9')
+      .map(|c| Pattern::new().then_str(&c.to_string()))
+      .collect(),
+  );
+  // isn't it so much easier to just do \s* ...
+  let whitespace = Pattern::new().repeat(
+    &Pattern::new().or(
+      &[" ", "\t", "\n", "\r"]
+        .iter()
+        .map(|c| Pattern::new().then_str(c))
+        .collect(),
+    ),
+  );
+  let phone_number_pat = Pattern::new()
+    .then_str("(")
+    .then(&digits)
+    .then(&digits)
+    .then(&digits)
+    .then_str(")")
+    .then(&whitespace)
+    .then(&digits)
+    .then(&digits)
+    .then(&digits)
+    .then(&whitespace)
+    .then_str("-")
+    .then(&whitespace)
+    .then(&digits)
+    .then(&digits)
+    .then(&digits)
+    .then(&digits);
+  let dfa = phone_number_pat.to_dfa().simplify();
+  let b = dfa.to_block_dfa(8);
+  b.print();
+  panic!();
+  assert!(accepts_str(&dfa, "(123)456-7890"));
+  assert!(accepts_str(&dfa, "(123)  \t\n456 \r\n- \n\r7890"));
+  assert!(!accepts_str(&dfa, "(123)4567890"));
 }
